@@ -1,0 +1,289 @@
+// Sistem Informasi Pondok (SIP) — Prisma Schema
+// Provider defaults to PostgreSQL (recommended for Vercel: Vercel Postgres / Neon / Supabase).
+// For quick local prototyping without a server, swap provider to "sqlite" and
+// set DATABASE_URL="file:./dev.db" in your .env — the rest of the schema is compatible.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Access control
+// ---------------------------------------------------------------------------
+
+enum Role {
+  SUPER_ADMIN
+  BENDAHARA
+  KEAMANAN
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  passwordHash  String
+  role          Role
+  avatarUrl     String?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  auditLogs     AuditLog[]
+  payments      Payment[]        @relation("PaymentRecordedBy")
+  permits       Permit[]         @relation("PermitApprovedBy")
+  violations    Violation[]      @relation("ViolationRecordedBy")
+
+  @@map("users")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  action    String // e.g. "CREATE_SANTRI", "UPDATE_PAYMENT", "BACKUP_DB"
+  entity    String // e.g. "Santri", "Payment"
+  entityId  String?
+  metadata  Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Academic structure
+// ---------------------------------------------------------------------------
+
+model Dormitory {
+  id       String  @id @default(cuid())
+  name     String
+  gender   Gender
+  capacity Int
+  santris  Santri[]
+
+  @@map("dormitories")
+}
+
+model Kelas {
+  id      String   @id @default(cuid())
+  name    String // e.g. "VII A", "Tsanawiyah 1"
+  level   String // e.g. "MTs", "MA"
+  santris Santri[]
+
+  @@map("classes")
+}
+
+enum Gender {
+  PUTRA
+  PUTRI
+}
+
+enum SantriStatus {
+  AKTIF
+  ALUMNI
+  CUTI
+  KELUAR
+}
+
+model Santri {
+  id            String       @id @default(cuid())
+  nis           String       @unique // Nomor Induk Santri
+  nisn          String?      @unique
+  name          String
+  gender        Gender
+  status        SantriStatus @default(AKTIF)
+  birthPlace    String?
+  birthDate     DateTime?
+  address       String?
+  phone         String?
+  parentName    String?
+  parentPhone   String?
+  photoUrl      String?
+  enrolledAt    DateTime     @default(now())
+  graduatedAt   DateTime?
+
+  kelasId       String?
+  kelas         Kelas?       @relation(fields: [kelasId], references: [id])
+
+  dormitoryId   String?
+  dormitory     Dormitory?   @relation(fields: [dormitoryId], references: [id])
+
+  payments      Payment[]
+  permits       Permit[]
+  violations    Violation[]
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([status])
+  @@index([gender])
+  @@map("santris")
+}
+
+model Teacher {
+  id        String   @id @default(cuid())
+  nip       String?  @unique
+  name      String
+  gender    Gender
+  subject   String?
+  phone     String?
+  photoUrl  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("teachers")
+}
+
+model Staff {
+  id        String   @id @default(cuid())
+  name      String
+  gender    Gender
+  position  String
+  phone     String?
+  photoUrl  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("staff")
+}
+
+// ---------------------------------------------------------------------------
+// Bendahara (Treasurer) module
+// ---------------------------------------------------------------------------
+
+enum PaymentType {
+  SYAHRIAH
+  DAFTAR_ULANG
+  INFAQ
+  TABUNGAN
+  LAINNYA
+}
+
+enum PaymentStatus {
+  LUNAS
+  MENUNGGU_VERIFIKASI
+  BELUM_BAYAR
+  DITOLAK
+}
+
+enum PaymentMethod {
+  TUNAI
+  TRANSFER
+  QRIS
+}
+
+model Payment {
+  id            String        @id @default(cuid())
+  santriId      String
+  santri        Santri        @relation(fields: [santriId], references: [id])
+  type          PaymentType
+  period        String // e.g. "2025-08" for syahriah month
+  amount        Int // stored in smallest currency unit (Rupiah, no decimals)
+  status        PaymentStatus @default(BELUM_BAYAR)
+  method        PaymentMethod @default(TUNAI)
+  receiptNumber String?       @unique
+  receiptFileUrl String?
+  note          String?
+  paidAt        DateTime?
+
+  recordedById  String?
+  recordedBy    User?         @relation("PaymentRecordedBy", fields: [recordedById], references: [id])
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([status])
+  @@index([type])
+  @@map("payments")
+}
+
+model Saving {
+  id        String   @id @default(cuid())
+  santriId  String
+  amount    Int
+  type      String // "SETOR" | "TARIK"
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@map("savings")
+}
+
+// ---------------------------------------------------------------------------
+// Keamanan (Security) module
+// ---------------------------------------------------------------------------
+
+enum PermitStatus {
+  DIAJUKAN
+  DISETUJUI
+  DITOLAK
+  KEMBALI
+  TERLAMBAT
+}
+
+model Permit {
+  id           String       @id @default(cuid())
+  santriId     String
+  santri       Santri       @relation(fields: [santriId], references: [id])
+  reason       String
+  destination  String
+  exitAt       DateTime?
+  expectedReturnAt DateTime?
+  actualReturnAt   DateTime?
+  status       PermitStatus @default(DIAJUKAN)
+
+  approvedById String?
+  approvedBy   User?        @relation("PermitApprovedBy", fields: [approvedById], references: [id])
+
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([status])
+  @@map("permits")
+}
+
+enum ViolationSeverity {
+  RINGAN
+  SEDANG
+  BERAT
+}
+
+model Violation {
+  id           String            @id @default(cuid())
+  santriId     String
+  santri       Santri            @relation(fields: [santriId], references: [id])
+  description  String
+  severity     ViolationSeverity
+  points       Int               @default(0)
+  penalty      String?
+  occurredAt   DateTime          @default(now())
+
+  recordedById String?
+  recordedBy   User?             @relation("ViolationRecordedBy", fields: [recordedById], references: [id])
+
+  createdAt    DateTime          @default(now())
+
+  @@index([severity])
+  @@map("violations")
+}
+
+// ---------------------------------------------------------------------------
+// System
+// ---------------------------------------------------------------------------
+
+model BackupLog {
+  id          String   @id @default(cuid())
+  fileName    String
+  sizeBytes   Int
+  triggeredBy String
+  status      String // "SUCCESS" | "FAILED"
+  createdAt   DateTime @default(now())
+
+  @@map("backup_logs")
+}
